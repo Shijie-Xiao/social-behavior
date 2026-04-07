@@ -1,0 +1,155 @@
+_wandb:
+    value:
+        cli_version: 0.24.2
+        code_path: source-MS_mice-srnn-pytorch_srnn_train_mice.py
+        e:
+            ho8j73j0c4dlplhc8hzyknkpecr8m6v6:
+                args:
+                    - --data
+                    - ../data/mice/dataset_r1_w20_s10_fs4.npz
+                    - --exp_tag
+                    - r1_v1
+                    - --num_epochs
+                    - "100"
+                    - --batch_size
+                    - "64"
+                    - --learning_rate
+                    - "1e-3"
+                    - --lambda_dist
+                    - "0.1"
+                    - --grad_clip
+                    - "10.0"
+                    - --human_node_rnn_size
+                    - "128"
+                    - --human_human_edge_rnn_size
+                    - "256"
+                    - --human_node_embedding_size
+                    - "64"
+                    - --human_human_edge_embedding_size
+                    - "64"
+                    - --attention_size
+                    - "64"
+                    - --obs_length
+                    - "10"
+                    - --pred_length
+                    - "10"
+                    - --eval_every
+                    - "5"
+                    - --eval_batches
+                    - "10"
+                    - --save_every
+                    - "10"
+                    - --num_workers
+                    - "4"
+                    - --wandb_project
+                    - MS_mice
+                codePath: srnn-pytorch/srnn/train_mice.py
+                codePathLocal: train_mice.py
+                cpu_count: 128
+                cpu_count_logical: 256
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "270032244736"
+                        used: "4041449472"
+                email: sxiao73@gatech.edu
+                executable: /pscratch/sd/s/sixao74/envs/sa/bin/python
+                git:
+                    commit: 5cca1918dc7c61c2e4e0fcd1f5ad562d1ef636c8
+                    remote: git@github.com:Shijie-Xiao/social-behavior.git
+                gpu: NVIDIA A100-PCIE-40GB
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "42949672960"
+                      name: NVIDIA A100-PCIE-40GB
+                      uuid: GPU-fdeed65c-bf06-f3a3-c9d0-c6e58e6e2581
+                host: login21
+                memory:
+                    total: "540064489472"
+                os: Linux-6.4.0-150600.23.73_15.0.14-cray_shasta_c-x86_64-with-glibc2.17
+                program: train_mice.py
+                python: CPython 3.8.20
+                root: /pscratch/sd/s/sixao74/MS/socialAttention/social-attention/srnn-pytorch/srnn
+                startedAt: "2026-04-07T07:21:09.008662Z"
+                writerId: ho8j73j0c4dlplhc8hzyknkpecr8m6v6
+        m: []
+        python_version: 3.8.20
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 1
+                - 13
+                - 15
+                - 16
+                - 61
+            "4": 3.8.20
+            "5": 0.24.2
+            "12": 0.24.2
+            "13": linux-x86_64
+arena_px:
+    value: 450
+attention_size:
+    value: 64
+batch_size:
+    value: 64
+data:
+    value: /pscratch/sd/s/sixao74/MS/socialAttention/social-attention/srnn-pytorch/srnn/../data/mice/dataset_r1_w20_s10_fs4.npz
+dropout:
+    value: 0
+eval_batches:
+    value: 10
+eval_every:
+    value: 5
+exp_tag:
+    value: r1_v1
+gpu:
+    value: NVIDIA A100-PCIE-40GB
+grad_clip:
+    value: 10
+human_human_edge_embedding_size:
+    value: 64
+human_human_edge_input_size:
+    value: 2
+human_human_edge_rnn_size:
+    value: 256
+human_node_embedding_size:
+    value: 64
+human_node_input_size:
+    value: 2
+human_node_output_size:
+    value: 5
+human_node_rnn_size:
+    value: 128
+lambda_dist:
+    value: 0.1
+learning_rate:
+    value: 0.001
+n_params:
+    value: 858501
+n_train:
+    value: 22260
+n_val:
+    value: 2782
+no_wandb:
+    value: false
+num_epochs:
+    value: 100
+num_workers:
+    value: 4
+obs_length:
+    value: 10
+pred_length:
+    value: 10
+save_every:
+    value: 10
+seq_length:
+    value: 20
+wandb_entity:
+    value: sxiao73-georgia-institute-of-technology
+wandb_project:
+    value: MS_mice

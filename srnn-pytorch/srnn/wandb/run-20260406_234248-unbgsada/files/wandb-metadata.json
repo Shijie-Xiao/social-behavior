@@ -1,0 +1,68 @@
+{
+  "os": "Linux-6.4.0-150600.23.73_15.0.14-cray_shasta_c-x86_64-with-glibc2.17",
+  "python": "CPython 3.8.20",
+  "startedAt": "2026-04-07T06:42:48.429323Z",
+  "args": [
+    "--num_epochs",
+    "3",
+    "--batch_size",
+    "32",
+    "--num_workers",
+    "0",
+    "--save_every",
+    "1",
+    "--eval_every",
+    "1",
+    "--eval_batches",
+    "3",
+    "--data",
+    "../data/mice/dataset_r2_w20_s10_fs4.npz",
+    "--exp_tag",
+    "wandb_test",
+    "--human_node_rnn_size",
+    "64",
+    "--human_human_edge_rnn_size",
+    "64",
+    "--human_node_embedding_size",
+    "32",
+    "--human_human_edge_embedding_size",
+    "32",
+    "--attention_size",
+    "32"
+  ],
+  "program": "train_mice.py",
+  "codePath": "srnn-pytorch/srnn/train_mice.py",
+  "codePathLocal": "train_mice.py",
+  "git": {
+    "remote": "git@github.com:Shijie-Xiao/social-behavior.git",
+    "commit": "5cca1918dc7c61c2e4e0fcd1f5ad562d1ef636c8"
+  },
+  "email": "sxiao73@gatech.edu",
+  "root": "/pscratch/sd/s/sixao74/MS/socialAttention/social-attention/srnn-pytorch/srnn",
+  "host": "login21",
+  "executable": "/pscratch/sd/s/sixao74/envs/sa/bin/python",
+  "cpu_count": 128,
+  "cpu_count_logical": 256,
+  "gpu": "NVIDIA A100-PCIE-40GB",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "270032244736",
+      "used": "4035452928"
+    }
+  },
+  "memory": {
+    "total": "540064489472"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A100-PCIE-40GB",
+      "memoryTotal": "42949672960",
+      "cudaCores": 6912,
+      "architecture": "Ampere",
+      "uuid": "GPU-fdeed65c-bf06-f3a3-c9d0-c6e58e6e2581"
+    }
+  ],
+  "cudaVersion": "13.0",
+  "writerId": "ikxfd5r4re4lp0vadvi4bhux4zqlzp2z"
+}
