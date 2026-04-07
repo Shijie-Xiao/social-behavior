@@ -154,7 +154,7 @@ def plot_one_with_attn(gt, pred, obs_length, attn_list, arena_scale,
         for m_dst in range(N_MICE):
             if m_dst == m_src:
                 continue
-            c_other = np.random.RandomState(m_dst + sample_id * 10).rand(3)
+            c_other = MOUSE_COLORS[m_dst]
             cb_o = m_dst * N_KPS + cb_idx
             true_xy_o = gt[:, cb_o] * s
 

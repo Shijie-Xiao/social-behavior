@@ -219,6 +219,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--weight_decay", type=float, default=5e-5,
+                        help="L2 weight decay for AdamW (original paper=5e-5)")
+    parser.add_argument("--warmup_epochs", type=int, default=5,
+                        help="Linear LR warmup epochs (0 to disable)")
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--lambda_dist", type=float, default=0.1)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -326,9 +330,22 @@ def main():
     scaler = torch.cuda.amp.GradScaler() if use_amp else None
     print(f"  AMP mixed precision: {'ON' if use_amp else 'OFF'}", flush=True)
 
-    optimizer = torch.optim.Adam(net.parameters(), lr=args.learning_rate)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.num_epochs, eta_min=1e-5)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=args.learning_rate,
+                                   weight_decay=args.weight_decay)
+
+    # LR schedule: optional linear warmup → cosine annealing
+    warmup_epochs = args.warmup_epochs
+    if warmup_epochs > 0:
+        warmup_sched = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.01, total_iters=warmup_epochs)
+        cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.num_epochs - warmup_epochs, eta_min=1e-5)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup_sched, cosine_sched],
+            milestones=[warmup_epochs])
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.num_epochs, eta_min=1e-5)
 
     # CSV log
     log_file = open(os.path.join(log_dir, "log_curve.csv"), "w")
@@ -342,6 +359,8 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Training: {args.num_epochs} epochs, batch={effective_batch}")
+    print(f"  AdamW weight_decay={args.weight_decay}")
+    print(f"  LR warmup: {warmup_epochs} epochs → cosine to 1e-5")
     print(f"  Eval every {args.eval_every} epochs")
     print(f"{'='*60}\n", flush=True)
 

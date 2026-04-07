@@ -157,9 +157,10 @@ class MouseSRNN(nn.Module):
             h_spat_per_node = h_spat[:, node_to_edges, :]  # (B, 12, 11, er)
             k = self.attn_k(h_spat_per_node)  # (B, 12, 11, attn)
 
-            # Scaled dot-product attention
+            # Scaled dot-product attention (original socialAttention scaling)
             scores = torch.einsum("bna,bnka->bnk", q, k)  # (B, 12, 11)
-            temperature = 11.0 / np.sqrt(q.size(-1))
+            num_keys = k.size(2)  # 11
+            temperature = num_keys / np.sqrt(q.size(-1))
             attn_weights = F.softmax(scores * temperature, dim=-1)  # (B, 12, 11)
 
             # Weighted sum of spatial hidden states
@@ -282,12 +283,13 @@ class MouseSRNN(nn.Module):
                 h_spat = hs_flat.reshape(B, N_SPATIAL, -1)
                 c_spat = cs_flat.reshape(B, N_SPATIAL, -1)
 
-                # 3. Attention
+                # 3. Attention (original socialAttention scaling)
                 q = self.attn_q(h_temp)
                 h_spat_per_node = h_spat[:, node_to_edges, :]
                 k = self.attn_k(h_spat_per_node)
                 scores = torch.einsum("bna,bnka->bnk", q, k)
-                temperature = 11.0 / np.sqrt(q.size(-1))
+                num_keys = k.size(2)  # 11
+                temperature = num_keys / np.sqrt(q.size(-1))
                 attn_weights = F.softmax(scores * temperature, dim=-1)
                 h_spatial_attn = torch.einsum(
                     "bnk,bnke->bne", attn_weights, h_spat_per_node)
@@ -323,12 +325,15 @@ class MouseSRNN(nn.Module):
             return _run_one_pass(nodes)
 
         all_preds = []
+        last_params = None
+        last_attn = None
         for _ in range(n_samples):
-            pred_pos, _, _ = _run_one_pass(nodes)
+            pred_pos, pred_params, attn_list = _run_one_pass(nodes)
             all_preds.append(pred_pos)
+            last_params = pred_params
+            last_attn = attn_list
         pred_pos_all = torch.stack(all_preds, dim=0)
-        _, pred_params, attn_list = _run_one_pass(nodes)
-        return pred_pos_all, pred_params, attn_list
+        return pred_pos_all, last_params, last_attn
 
 
 def build_edges_from_nodes(nodes):
