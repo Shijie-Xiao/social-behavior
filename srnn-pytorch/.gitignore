@@ -23,5 +23,5 @@ plot_*
 copy_from_server.sh
 log
 
-# Large data files
-srnn-pytorch/data/mice/*.npy
+# Experiment directories
+data/
