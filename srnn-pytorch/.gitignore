@@ -28,6 +28,7 @@ log/
 # Experiment directories & artifacts
 data/
 wandb/
+srnn/wandb/
 __pycache__/
 *.tar
 *.pkl
