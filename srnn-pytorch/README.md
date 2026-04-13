@@ -92,6 +92,40 @@ python evaluate_mice.py \
   --split test --mode mean --arena_px 450
 ```
 
+### Results (test set, `evaluate_mice.py --mode mean`)
+
+**v3_4kp_full (best configuration):**
+
+| Metric | Value |
+|--------|-------|
+| **CB ADE** | **12.53 px** (1.39 cm) |
+| CB FDE | 23.84 px (2.65 cm) |
+| All-node ADE | 14.65 px (1.63 cm) |
+| All-node FDE | 26.87 px (2.99 cm) |
+
+
+### Baseline Comparison (center_back ADE)
+
+| Method | CB ADE (px) | Improvement |
+|--------|-------------|-------------|
+| Static (repeat last frame) | 17.63 | — |
+| Constant velocity | 21.77 | — |
+| Linear extrapolation | 22.02 | — |
+| **MouseSRNN 4kp (ours)** | **12.53** | **+29.0% vs static** |
+| MouseSRNN 1kp | 13.98 | +20.7% vs static |
+
+### 1kp vs 4kp Comparison
+
+Both models trained with identical hyperparameters, evaluated with the same `evaluate_mice.py` pipeline (calls `net.predict()`). Static baselines are identical (17.63 px), confirming fair comparison on the same test data.
+
+| Metric | 1kp (3 nodes) | **4kp (12 nodes)** | Δ |
+|--------|--------------|-------------------|---|
+| **CB ADE (px)** | 13.98 | **12.53** | **-1.45 (-10.4%)** |
+| **CB FDE (px)** | 25.77 | **23.84** | **-1.93 (-7.5%)** |
+| All-node ADE (px) | 13.98 | 14.65 | +0.67 |
+
+The 4-keypoint model improves center_back prediction by 10.4% over the single-keypoint baseline, demonstrating that body pose context (head direction, body curvature) helps predict the body center trajectory. The all-node ADE is slightly higher for 4kp because it additionally predicts noisier peripheral keypoints (nose, tail_base), but the primary CB metric and inter-mouse distance error both improve. Beyond prediction accuracy, the 4kp model uniquely provides complete body pose prediction and fine-grained attention analysis for social behavior interpretation.
+
 ## Visualization
 
 ### Attention & Trajectory Figures
