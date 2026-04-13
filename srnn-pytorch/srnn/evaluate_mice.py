@@ -213,6 +213,8 @@ def evaluate(net, loader, obs_length, pred_length, device, n_kps,
         e_t, e_s = build_edges_from_nodes(
             nodes_b, net._spatial_src, net._spatial_dst)
         outputs_tf = net(nodes_b, e_t, e_s)
+        if isinstance(outputs_tf, tuple):
+            outputs_tf = outputs_tf[0]
         nll = gaussian_2d_nll(outputs_tf, nodes_b, pred_length)
         all_metrics["nll"].append(nll)
 

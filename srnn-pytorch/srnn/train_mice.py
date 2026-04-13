@@ -276,6 +276,9 @@ def main():
     parser.add_argument("--human_human_edge_embedding_size", type=int, default=64)
     parser.add_argument("--attention_size", type=int, default=64)
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--residual", action="store_true",
+                        help="Predict displacement (residual) instead of "
+                             "absolute position")
 
     # Training
     parser.add_argument("--batch_size", type=int, default=64)
@@ -447,6 +450,7 @@ def main():
     print(f"  Training: {args.num_epochs} epochs, batch={effective_batch}")
     print(f"  AdamW weight_decay={args.weight_decay}")
     print(f"  Attention: additive (Bahdanau), entropy_reg={args.lambda_attn}")
+    print(f"  Residual prediction: {'ON' if args.residual else 'OFF'}")
     print(f"  LR warmup: {warmup_epochs} epochs → cosine to 1e-5")
     if ss_enabled:
         print(f"  Scheduled Sampling: start epoch {args.ss_start_epoch}, "

@@ -78,6 +78,7 @@ class MouseSRNN(nn.Module):
     def __init__(self, args, infer=False):
         super().__init__()
         self.infer = infer
+        self.residual = getattr(args, "residual", False)
 
         n_kps = getattr(args, "n_keypoints", 4)
         graph_type = getattr(args, "graph_type", "full")
@@ -255,7 +256,11 @@ class MouseSRNN(nn.Module):
             h_node = hn_f.reshape(B, N, -1)
             c_node = cn_f.reshape(B, N, -1)
 
-            outputs.append(self.output_linear(h_node))
+            out = self.output_linear(h_node)
+            if self.residual:
+                out = out.clone()
+                out[..., :2] = out[..., :2] + nodes[:, t]
+            outputs.append(out)
 
         avg_entropy = total_entropy / T
         return torch.stack(outputs, dim=1), avg_entropy
@@ -321,6 +326,9 @@ class MouseSRNN(nn.Module):
             c_node = cn_f.reshape(B, N, -1)
 
             out = self.output_linear(h_node)
+            if self.residual:
+                out = out.clone()
+                out[..., :2] = out[..., :2] + current_pos
             outputs.append(out)
 
             prev_pos = current_pos.detach()
@@ -406,6 +414,9 @@ class MouseSRNN(nn.Module):
                 c_node = cn_f.reshape(B, N, -1)
 
                 out = self.output_linear(h_node)
+                if self.residual:
+                    out = out.clone()
+                    out[..., :2] = out[..., :2] + current_pos
                 next_predicted = _decode_output(out)
 
                 prev_pos = current_pos.clone()
