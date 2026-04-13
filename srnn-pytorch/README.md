@@ -35,16 +35,6 @@ The model predicts future trajectories of 3 interacting mice (each represented b
 
 4. **Direction + log-distance**: Replacing raw displacement with `[cos θ, sin θ, log(1 + d)]` decouples direction from distance, preventing close-range interactions from dominating the representation.
 
-## Pipeline
-
-```
-Raw MABe Data → preprocess_mice.py → .npz dataset → train_mice.py → checkpoints
-                                                           ↓
-                                          evaluate_mice.py → metrics + results.pkl
-                                                           ↓
-                                    visualize_attn_pairwise.py → attention & trajectory figures
-```
-
 ## Data Preprocessing
 
 ```bash
@@ -94,20 +84,6 @@ cd srnn && python train_mice.py \
 | `lambda_dist` | 0.5 | Body distance loss weight |
 | `lambda_attn` | 0.01 | Attention entropy regularization weight |
 
-### Model Architecture
-
-| Component | Size |
-|-----------|------|
-| Node RNN (LSTM) | 128 hidden |
-| Edge RNN (LSTM) | 256 hidden |
-| Node embedding | 64 |
-| Edge embedding | 64 |
-| Attention | 64 (additive/Bahdanau) |
-| Keypoint type embedding | 8 |
-| Output | 5 (μx, μy, σx, σy, ρ) |
-
-Total parameters: ~2.6M
-
 ## Evaluation
 
 ```bash
@@ -115,38 +91,6 @@ python evaluate_mice.py \
   --checkpoint ../save/mice/v3_4kp_full/best_model.tar \
   --split test --mode mean --arena_px 450
 ```
-
-### Results (v3_4kp_full, test set)
-
-| Metric | Value |
-|--------|-------|
-| **CB ADE** | **12.53 px** (1.39 cm) |
-| CB FDE | 23.84 px (2.65 cm) |
-| All-node ADE | 14.65 px (1.63 cm) |
-| All-node FDE | 26.87 px (2.99 cm) |
-| NLL | -7.375 |
-| Body structure error | 3.16 px |
-| Inter-mouse distance error | 13.77 px |
-
-### Baseline Comparison (center_back ADE)
-
-| Method | CB ADE (px) |
-|--------|-------------|
-| Static (repeat last frame) | 17.63 |
-| Linear extrapolation | 22.02 |
-| Constant velocity | 21.77 |
-| **MouseSRNN (ours)** | **12.53 (+29.0%)** |
-
-### Ablation: Graph Configurations
-
-All trained with identical hyperparameters on the same data.
-
-| Config | Nodes | CB ADE (px) | Description |
-|--------|-------|-------------|-------------|
-| v3_1kp_full | 3 | 12.51 | 1 keypoint (center_back only), fully connected |
-| v3_4kp_inter | 12 | 12.78 | 4 keypoints, inter-mouse edges only |
-| **v3_4kp_full** | **12** | **12.53** | **4 keypoints, full graph (intra + inter)** |
-| v3_4kp_full_residual | 12 | 12.05 | Same + residual prediction (no improvement) |
 
 ## Visualization
 
