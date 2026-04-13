@@ -1,7 +1,7 @@
 # Social Attention for Mouse Trajectory Prediction
 
 Adapted from [Social Attention: Modeling Attention in Human Crowds](https://arxiv.org/abs/1710.04689) (Vemula et al., ICRA 2018).
-Original code: [BenJamesbabala/srnn-pytorch](https://github.com/BenJamesbabala/srnn-pytorch)
+Original code: [cmubig/socialAttention](https://github.com/cmubig/socialAttention/tree/master/social-attention/srnn-pytorch)
 
 This repository extends the Structural RNN with social attention mechanism from **human crowd trajectory prediction** to **multi-mouse social behavior analysis**, with several architectural improvements for multi-keypoint body pose modeling.
 
