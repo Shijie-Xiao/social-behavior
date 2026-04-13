@@ -1,76 +1,96 @@
 """
 Loss functions for mouse trajectory prediction.
 
-L_total = w(activity) * L_trajectory  +  lambda * L_body
+L_total = w(activity) * L_trajectory  +  lambda * L_dist
 
 - L_trajectory: bivariate Gaussian NLL (per-node, per-frame)
-- L_body:       intra-mouse pairwise distance MSE (body rigidity constraint)
-                Only enforces distances within each mouse (C(4,2)=6 × 3 = 18 pairs).
-                Inter-mouse distances are NOT constrained here — the attention
-                mechanism should learn social interactions from the NLL gradient.
+- L_dist:       relative pairwise distance loss — compares predicted vs GT
+                intra-mouse keypoint distances.  Disabled when n_kps=1.
 - w(activity):  per-window scalar that down-weights static windows
 """
 
 import torch
 import numpy as np
 
-N_NODES = 12
 N_MICE = 3
-N_KPS = 4
 
-_INTRA_MOUSE_MASK = None
+_BONE_CACHE = {}
 
 
-def _get_intra_mouse_mask(device):
+def compute_bone_stats(train_nodes, n_keypoints=4):
     """
-    Build (12, 12) bool mask selecting only intra-mouse upper-triangle pairs.
+    Compute pairwise distance statistics (for logging) and cache
+    the intra-mouse pair indices used by body_distance_loss().
 
-    For 3 mice × 4 keypoints:
-      Mouse 0: nodes 0-3  → C(4,2)=6 pairs
-      Mouse 1: nodes 4-7  → 6 pairs
-      Mouse 2: nodes 8-11 → 6 pairs
-      Total: 18 pairs  (NOT the 48 inter-mouse pairs)
+    For n_keypoints=1, no pairs exist → distance loss is disabled.
+
+    Parameters
+    ----------
+    train_nodes : np.ndarray  (N, T, ..., 2)
+    n_keypoints : int
     """
-    global _INTRA_MOUSE_MASK
-    if _INTRA_MOUSE_MASK is not None and _INTRA_MOUSE_MASK.device == device:
-        return _INTRA_MOUSE_MASK
-    mask = torch.zeros(N_NODES, N_NODES, dtype=torch.bool, device=device)
+    _BONE_CACHE.clear()
+    _BONE_CACHE["n_kps"] = n_keypoints
+
+    if n_keypoints <= 1:
+        _BONE_CACHE["n_pairs"] = 0
+        _BONE_CACHE["_device_cache"] = {}
+        print(f"  n_keypoints={n_keypoints}: no intra-mouse pairs, "
+              f"distance loss disabled")
+        return
+
+    N = train_nodes.shape[0]
+    T = train_nodes.shape[1]
+    n_nodes = N_MICE * n_keypoints
+    data = train_nodes.reshape(N, T, N_MICE, n_keypoints, 2)
+
+    for ki in range(n_keypoints):
+        for kj in range(ki + 1, n_keypoints):
+            dists = []
+            for m in range(N_MICE):
+                d = np.linalg.norm(data[:, :, m, ki, :] - data[:, :, m, kj, :],
+                                   axis=-1)
+                dists.append(d.ravel())
+            d_all = np.concatenate(dists)
+            print(f"  pair ({ki}→{kj}): mean={d_all.mean():.5f}  "
+                  f"std={d_all.std():.5f}")
+
+    idx_i, idx_j = [], []
     for m in range(N_MICE):
-        start = m * N_KPS
-        for i in range(N_KPS):
-            for j in range(i + 1, N_KPS):
-                mask[start + i, start + j] = True
-    _INTRA_MOUSE_MASK = mask
-    return mask
+        offset = m * n_keypoints
+        for ki in range(n_keypoints):
+            for kj in range(ki + 1, n_keypoints):
+                idx_i.append(offset + ki)
+                idx_j.append(offset + kj)
+
+    _BONE_CACHE["idx_i"] = np.array(idx_i, dtype=np.int64)
+    _BONE_CACHE["idx_j"] = np.array(idx_j, dtype=np.int64)
+    _BONE_CACHE["n_pairs"] = len(idx_i)
+    _BONE_CACHE["_device_cache"] = {}
+    print(f"  Total intra-mouse pairs: {len(idx_i)}")
+
+
+def _get_pair_indices(device):
+    dc = _BONE_CACHE["_device_cache"]
+    if device not in dc:
+        dc[device] = (
+            torch.tensor(_BONE_CACHE["idx_i"], dtype=torch.long, device=device),
+            torch.tensor(_BONE_CACHE["idx_j"], dtype=torch.long, device=device),
+        )
+    return dc[device]
 
 
 def gaussian_2d_nll(outputs, targets, pred_length):
     """
     Bivariate Gaussian NLL loss (batch-parallel, numerically stable).
 
-    Following the original socialAttention design: output at time t
-    predicts the position at time t+1.  So we align:
-        output[:, obs-1 : obs+pred-1]  vs  target[:, obs : obs+pred]
-
-    Parameters
-    ----------
-    outputs : (B, seq_len, N, 5)
-        Predicted parameters: mux, muy, log_sx, log_sy, raw_corr
-    targets : (B, seq_len, N, 2)
-        Ground truth (x, y)
-    pred_length : int
-        Number of future frames to predict.
-
-    Returns
-    -------
-    nll : (B,)  per-sample NLL averaged over pred frames and nodes
+    output[t] predicts target[t+1].
     """
     seq_len = outputs.size(1)
     obs_len = seq_len - pred_length
 
-    # output[t] predicts target[t+1]
-    out = outputs[:, obs_len - 1: -1, :, :]  # (B, pred, N, 5)
-    tgt = targets[:, obs_len:, :, :]          # (B, pred, N, 2)
+    out = outputs[:, obs_len - 1: -1, :, :]
+    tgt = targets[:, obs_len:, :, :]
 
     mux = out[..., 0]
     muy = out[..., 1]
@@ -93,61 +113,32 @@ def gaussian_2d_nll(outputs, targets, pred_length):
         - np.log(2 * np.pi)
     )
 
-    nll = -log_prob.mean(dim=(1, 2))  # mean over pred_frames, nodes → (B,)
+    nll = -log_prob.mean(dim=(1, 2))
     return nll
 
 
 def body_distance_loss(pred_pos, gt_pos):
     """
-    Intra-mouse pairwise distance loss: C(4,2)=6 pairs × 3 mice = 18 pairs.
+    Relative pairwise distance loss for all C(n_kps,2) intra-mouse
+    keypoint pairs × 3 mice.
 
-    Enforces body rigidity — the 4 keypoints of each mouse should maintain
-    their relative distances.  Inter-mouse distances are deliberately excluded
-    so the attention mechanism must learn social interactions from the NLL.
-
-    L = mean_{intra_pairs} [ (d_pred - d_gt)^2 / (d_gt + eps)^2 ]
-
-    eps = 0.01 (≈4.5 px in normalised coords).
-
-    Parameters
-    ----------
-    pred_pos : (B, pred_len, N, 2)
-    gt_pos   : (B, pred_len, N, 2)
-
-    Returns
-    -------
-    loss : (B,)
+    Returns zero tensor if n_kps <= 1 (no pairs).
     """
-    mask = _get_intra_mouse_mask(pred_pos.device)  # (12, 12) with 18 True entries
+    if _BONE_CACHE.get("n_pairs", 0) == 0:
+        return torch.zeros(pred_pos.size(0), device=pred_pos.device)
 
-    diff_pred = pred_pos.unsqueeze(3) - pred_pos.unsqueeze(2)  # (B, T, 12, 12, 2)
-    diff_gt = gt_pos.unsqueeze(3) - gt_pos.unsqueeze(2)
+    idx_i, idx_j = _get_pair_indices(pred_pos.device)
 
-    d_pred = torch.norm(diff_pred, dim=-1)  # (B, T, 12, 12)
-    d_gt = torch.norm(diff_gt, dim=-1)
+    d_pred = torch.norm(pred_pos[:, :, idx_i, :] - pred_pos[:, :, idx_j, :],
+                        dim=-1)
+    d_gt = torch.norm(gt_pos[:, :, idx_i, :] - gt_pos[:, :, idx_j, :],
+                      dim=-1)
 
-    d_pred_pairs = d_pred[:, :, mask]  # (B, T, 18)
-    d_gt_pairs = d_gt[:, :, mask]
-
-    rel_err = ((d_pred_pairs - d_gt_pairs) / (d_gt_pairs + 0.01)) ** 2
-    loss = rel_err.mean(dim=(1, 2))  # (B,)
-    return loss
+    loss = ((d_pred - d_gt) / (d_gt + 0.01)) ** 2
+    return loss.mean(dim=(1, 2))
 
 
 def activity_weight(activity, tau=None, w_min=0.1):
-    """
-    Compute per-sample trajectory loss weight based on activity level.
-
-    Parameters
-    ----------
-    activity : (B,) normalised mean displacement
-    tau : float or None.  If None, use batch median as adaptive threshold.
-    w_min : float, minimum weight
-
-    Returns
-    -------
-    w : (B,)  weights in [w_min, 1.0]
-    """
     if tau is None:
         tau = activity.median().clamp(min=1e-6)
     w = (activity / tau).clamp(min=w_min, max=1.0)
@@ -157,34 +148,18 @@ def activity_weight(activity, tau=None, w_min=0.1):
 def combined_loss(outputs, nodes, activity, pred_length, lambda_dist=0.1):
     """
     Full training loss.
-
-    Parameters
-    ----------
-    outputs  : (B, seq_len, N, 5) — model output (Gaussian params)
-    nodes    : (B, seq_len, N, 2) — ground truth positions
-    activity : (B,) — per-window activity level
-    pred_length : int
-    lambda_dist : float — distance loss weight
-
-    Returns
-    -------
-    total_loss : scalar
-    loss_dict  : dict with individual loss components for logging
     """
     B = outputs.size(0)
     seq_len = outputs.size(1)
     obs_len = seq_len - pred_length
 
-    # 1. Trajectory NLL (per sample) — output[t] predicts target[t+1]
-    nll = gaussian_2d_nll(outputs, nodes, pred_length)  # (B,)
+    nll = gaussian_2d_nll(outputs, nodes, pred_length)
 
-    # 2. Activity weighting for trajectory loss
-    w = activity_weight(activity)  # (B,)
+    w = activity_weight(activity)
     weighted_nll = (w * nll).mean()
 
-    # 3. Body distance loss on predicted positions (intra-mouse only)
     pred_params = outputs[:, obs_len - 1: -1, :, :]
-    pred_pos = pred_params[..., :2]  # (B, pred, N, 2) — use mux, muy
+    pred_pos = pred_params[..., :2]
     gt_pos = nodes[:, obs_len:, :, :]
 
     d_loss = body_distance_loss(pred_pos, gt_pos).mean()

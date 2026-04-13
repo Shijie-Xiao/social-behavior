@@ -25,8 +25,8 @@ import torch
 import torch.nn as nn
 
 from model_mice import MouseSRNN, build_edges_from_nodes
-from mouse_dataset import get_mouse_dataloaders, N_NODES
-from criterion_mice import combined_loss
+from mouse_dataset import get_mouse_dataloaders, get_center_back_node_indices
+from criterion_mice import combined_loss, compute_bone_stats
 
 _HAS_WANDB = True
 try:
@@ -49,26 +49,36 @@ def _get_raw_model(net):
 # ─── Training / Validation ──────────────────────────────────────────
 
 def train_one_epoch(net, loader, optimizer, args, device, scheduler=None,
-                    use_wandb=False, global_step=0, scaler=None):
+                    use_wandb=False, global_step=0, scaler=None, ss_prob=0.0):
     net.train()
-    epoch_losses = {"total": 0, "nll": 0, "dist": 0, "w_sum": 0, "n": 0}
+    epoch_losses = {"total": 0, "nll": 0, "dist": 0, "w_sum": 0,
+                    "attn_ent": 0, "n": 0}
     use_amp = scaler is not None
+    raw_net = _get_raw_model(net)
 
     for batch_idx, (nodes_b, activity_b, _, _) in enumerate(loader):
         nodes_b = nodes_b.to(device, non_blocking=True)
         activity_b = activity_b.to(device, non_blocking=True)
 
-        edges_temp, edges_spat = build_edges_from_nodes(nodes_b)
-
         optimizer.zero_grad(set_to_none=True)
 
         with torch.cuda.amp.autocast(enabled=use_amp):
-            outputs = net(nodes_b, edges_temp, edges_spat)
+            if ss_prob > 0:
+                outputs, attn_entropy = net(
+                    nodes_b, obs_length=args.obs_length, ss_prob=ss_prob)
+            else:
+                edges_temp, edges_spat = build_edges_from_nodes(
+                    nodes_b, raw_net._spatial_src, raw_net._spatial_dst)
+                outputs, attn_entropy = net(nodes_b, edges_temp, edges_spat)
             loss, ld = combined_loss(
                 outputs, nodes_b, activity_b,
                 pred_length=args.pred_length,
                 lambda_dist=args.lambda_dist,
             )
+            if args.lambda_attn > 0:
+                if attn_entropy.dim() > 0:
+                    attn_entropy = attn_entropy.mean()
+                loss = loss + args.lambda_attn * attn_entropy
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -88,6 +98,9 @@ def train_one_epoch(net, loader, optimizer, args, device, scheduler=None,
         epoch_losses["nll"] += ld["nll"] * bs
         epoch_losses["dist"] += ld["dist"] * bs
         epoch_losses["w_sum"] += ld["w_mean"] * bs
+        ent_val = attn_entropy.item() if hasattr(attn_entropy, "item") \
+            else float(attn_entropy)
+        epoch_losses["attn_ent"] += ent_val * bs
         epoch_losses["n"] += bs
 
         if use_wandb and batch_idx % 20 == 0:
@@ -100,9 +113,10 @@ def train_one_epoch(net, loader, optimizer, args, device, scheduler=None,
             }, step=global_step + batch_idx)
 
         if batch_idx % 100 == 0:
+            ss_str = f" ss={ss_prob:.2f}" if ss_prob > 0 else ""
             print(f"  [{_ts()}] batch {batch_idx:>4d}/{len(loader)} | "
                   f"loss={ld['total']:.4f} nll={ld['nll']:.4f} "
-                  f"dist={ld['dist']:.6f}", flush=True)
+                  f"dist={ld['dist']:.6f}{ss_str}", flush=True)
 
     if scheduler is not None:
         scheduler.step()
@@ -113,6 +127,7 @@ def train_one_epoch(net, loader, optimizer, args, device, scheduler=None,
         "nll": epoch_losses["nll"] / n,
         "dist": epoch_losses["dist"] / n,
         "w_mean": epoch_losses["w_sum"] / n,
+        "attn_entropy": epoch_losses["attn_ent"] / n,
     }
 
 
@@ -120,13 +135,15 @@ def train_one_epoch(net, loader, optimizer, args, device, scheduler=None,
 def validate(net, loader, args, device):
     net.eval()
     epoch_losses = {"total": 0, "nll": 0, "dist": 0, "n": 0}
+    raw_net = _get_raw_model(net)
 
     for nodes_b, activity_b, _, _ in loader:
         nodes_b = nodes_b.to(device, non_blocking=True)
         activity_b = activity_b.to(device, non_blocking=True)
 
-        edges_temp, edges_spat = build_edges_from_nodes(nodes_b)
-        outputs = net(nodes_b, edges_temp, edges_spat)
+        edges_temp, edges_spat = build_edges_from_nodes(
+            nodes_b, raw_net._spatial_src, raw_net._spatial_dst)
+        outputs, _ = net(nodes_b, edges_temp, edges_spat)
 
         _, ld = combined_loss(
             outputs, nodes_b, activity_b,
@@ -148,24 +165,44 @@ def validate(net, loader, args, device):
 
 @torch.no_grad()
 def eval_ade_fde(net, loader, obs_length, pred_length, device,
-                 max_batches=5, arena_px=450):
+                 max_batches=5, arena_px=450, n_keypoints=4):
+    """
+    Autoregressive ADE/FDE evaluation.
+
+    Reports two ADE variants:
+      - ade_px:    over ALL nodes (config-specific)
+      - cb_ade_px: over center_back only (3 nodes, comparable across configs)
+    """
     raw_net = _get_raw_model(net)
     raw_net.eval()
+    cb_idx = get_center_back_node_indices(n_keypoints)
+
     ade_list, fde_list = [], []
+    cb_ade_list, cb_fde_list = [], []
     bl_static_ade, bl_linear_ade = [], []
+    bl_cb_static_ade, bl_cb_linear_ade = [], []
 
     for batch_idx, (nodes_b, activity_b, _, _) in enumerate(loader):
         if batch_idx >= max_batches:
             break
         nodes_b = nodes_b.to(device)
         gt_pred = nodes_b[:, obs_length:]
+        gt_cb = gt_pred[:, :, cb_idx, :]
 
-        pred_pos, _, _ = raw_net.predict(nodes_b, obs_length, mode="mean")
+        pred_pos = raw_net.predict(nodes_b, obs_length, mode="mean")[0]
+        pred_cb = pred_pos[:, :, cb_idx, :]
 
+        # All-node ADE/FDE
         err = torch.norm(pred_pos - gt_pred, dim=-1)
         ade_list.append(err.mean(dim=(1, 2)))
         fde_list.append(err[:, -1].mean(dim=1))
 
+        # Center-back ADE/FDE (cross-config comparable)
+        cb_err = torch.norm(pred_cb - gt_cb, dim=-1)
+        cb_ade_list.append(cb_err.mean(dim=(1, 2)))
+        cb_fde_list.append(cb_err[:, -1].mean(dim=1))
+
+        # Baselines — all nodes
         bl_s = nodes_b[:, obs_length - 1: obs_length].expand(
             -1, pred_pos.size(1), -1, -1)
         bl_err = torch.norm(bl_s - gt_pred, dim=-1)
@@ -177,15 +214,31 @@ def eval_ade_fde(net, loader, obs_length, pred_length, device,
         bl_l_err = torch.norm(bl_l - gt_pred, dim=-1)
         bl_linear_ade.append(bl_l_err.mean(dim=(1, 2)))
 
+        # Baselines — center_back only
+        bl_s_cb = bl_s[:, :, cb_idx, :]
+        bl_cb_err = torch.norm(bl_s_cb - gt_cb, dim=-1)
+        bl_cb_static_ade.append(bl_cb_err.mean(dim=(1, 2)))
+
+        bl_l_cb = bl_l[:, :, cb_idx, :]
+        bl_cb_l_err = torch.norm(bl_l_cb - gt_cb, dim=-1)
+        bl_cb_linear_ade.append(bl_cb_l_err.mean(dim=(1, 2)))
+
     scale = arena_px
     results = {
         "ade_px": torch.cat(ade_list).mean().item() * scale,
         "fde_px": torch.cat(fde_list).mean().item() * scale,
+        "cb_ade_px": torch.cat(cb_ade_list).mean().item() * scale,
+        "cb_fde_px": torch.cat(cb_fde_list).mean().item() * scale,
         "bl_static_ade_px": torch.cat(bl_static_ade).mean().item() * scale,
         "bl_linear_ade_px": torch.cat(bl_linear_ade).mean().item() * scale,
+        "bl_cb_static_ade_px": torch.cat(bl_cb_static_ade).mean().item() * scale,
+        "bl_cb_linear_ade_px": torch.cat(bl_cb_linear_ade).mean().item() * scale,
     }
     results["improvement_vs_static"] = (
         1 - results["ade_px"] / max(results["bl_static_ade_px"], 1e-6)
+    ) * 100
+    results["cb_improvement_vs_static"] = (
+        1 - results["cb_ade_px"] / max(results["bl_cb_static_ade_px"], 1e-6)
     ) * 100
     return results
 
@@ -203,6 +256,15 @@ def main():
                         default="../data/mice/dataset_combined_w20_s10_fs4.npz")
     parser.add_argument("--obs_length", type=int, default=10)
     parser.add_argument("--pred_length", type=int, default=10)
+
+    # Graph configuration
+    parser.add_argument("--n_keypoints", type=int, default=4,
+                        choices=[1, 2, 3, 4],
+                        help="Keypoints per mouse: 1=center_back, "
+                             "2=nose+center_back, 4=all")
+    parser.add_argument("--graph_type", type=str, default="full",
+                        choices=["full", "inter"],
+                        help="'full'=all edges, 'inter'=only inter-mouse")
 
     # Model
     parser.add_argument("--human_node_rnn_size", type=int, default=128)
@@ -225,6 +287,18 @@ def main():
                         help="Linear LR warmup epochs (0 to disable)")
     parser.add_argument("--grad_clip", type=float, default=10.0)
     parser.add_argument("--lambda_dist", type=float, default=0.1)
+    parser.add_argument("--lambda_attn", type=float, default=0.01,
+                        help="Attention entropy regularization weight "
+                             "(encourages non-uniform attention)")
+
+    # Scheduled Sampling (Bengio et al. 2015)
+    parser.add_argument("--ss_start_epoch", type=int, default=20,
+                        help="Epoch to begin scheduled sampling "
+                             "(0 = from start, after warmup SS is still 0)")
+    parser.add_argument("--ss_max", type=float, default=0.5,
+                        help="Maximum probability of using model prediction "
+                             "instead of GT during training (0 to disable SS)")
+
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--arena_px", type=float, default=450)
     parser.add_argument("--no_amp", action="store_true",
@@ -299,14 +373,23 @@ def main():
     loaders = get_mouse_dataloaders(
         args.data, obs_length=args.obs_length,
         batch_size=effective_batch, num_workers=args.num_workers,
+        n_keypoints=args.n_keypoints,
     )
     print(f"[{_ts()}] Data loaded in {time.time()-t0:.1f}s", flush=True)
+    n_nodes = 3 * args.n_keypoints
+    print(f"  Graph: {n_nodes} nodes, type={args.graph_type}, "
+          f"n_kps={args.n_keypoints}", flush=True)
     n_train = len(loaders["train"].dataset)
     n_val = len(loaders["val"].dataset)
     print(f"  Train: {n_train} windows, {len(loaders['train'])} batches",
           flush=True)
     print(f"  Val:   {n_val} windows, {len(loaders['val'])} batches",
           flush=True)
+    print(f"[{_ts()}] Computing bone-length statistics from training data ...",
+          flush=True)
+    compute_bone_stats(loaders["train"].dataset.nodes,
+                       n_keypoints=args.n_keypoints)
+
     if use_wandb:
         wandb.config.update({"n_train": n_train, "n_val": n_val,
                               "n_gpu": n_gpu, "effective_batch": effective_batch},
@@ -350,29 +433,51 @@ def main():
     # CSV log
     log_file = open(os.path.join(log_dir, "log_curve.csv"), "w")
     log_file.write("epoch,train_total,train_nll,train_dist,"
-                   "val_total,val_nll,val_dist,lr,"
-                   "ade_px,fde_px,bl_static_ade_px,bl_linear_ade_px\n")
+                   "val_total,val_nll,val_dist,lr,ss_prob,"
+                   "ade_px,fde_px,cb_ade_px,cb_fde_px,"
+                   "bl_static_ade_px,bl_linear_ade_px,"
+                   "bl_cb_static_ade_px,bl_cb_linear_ade_px\n")
 
     best_val = float("inf")
     best_epoch = 0
     best_ade = float("inf")
 
+    ss_enabled = args.ss_max > 0
     print(f"\n{'='*60}")
     print(f"  Training: {args.num_epochs} epochs, batch={effective_batch}")
     print(f"  AdamW weight_decay={args.weight_decay}")
+    print(f"  Attention: additive (Bahdanau), entropy_reg={args.lambda_attn}")
     print(f"  LR warmup: {warmup_epochs} epochs → cosine to 1e-5")
+    if ss_enabled:
+        print(f"  Scheduled Sampling: start epoch {args.ss_start_epoch}, "
+              f"max prob {args.ss_max:.2f}")
+    else:
+        print(f"  Scheduled Sampling: OFF")
     print(f"  Eval every {args.eval_every} epochs")
     print(f"{'='*60}\n", flush=True)
 
     for epoch in range(args.num_epochs):
         t0 = time.time()
-        print(f"[{_ts()}] === Epoch {epoch}/{args.num_epochs} ===", flush=True)
+
+        # Scheduled Sampling probability: linear ramp
+        if not ss_enabled or epoch < args.ss_start_epoch:
+            ss_prob = 0.0
+        else:
+            ramp_len = max(1, args.num_epochs - args.ss_start_epoch)
+            ss_prob = min(args.ss_max,
+                          (epoch - args.ss_start_epoch) / ramp_len
+                          * args.ss_max)
+
+        ss_str = f"  ss={ss_prob:.3f}" if ss_prob > 0 else ""
+        print(f"[{_ts()}] === Epoch {epoch}/{args.num_epochs}{ss_str} ===",
+              flush=True)
 
         global_step = epoch * len(loaders["train"])
 
         train_loss = train_one_epoch(
             net, loaders["train"], optimizer, args, device, scheduler,
             use_wandb=use_wandb, global_step=global_step, scaler=scaler,
+            ss_prob=ss_prob,
         )
 
         val_loss = validate(net, loaders["val"], args, device)
@@ -388,12 +493,14 @@ def main():
             eval_metrics = eval_ade_fde(
                 net, loaders["val"], args.obs_length, args.pred_length,
                 device, max_batches=args.eval_batches, arena_px=args.arena_px,
+                n_keypoints=args.n_keypoints,
             )
             print(f"  [{_ts()}] ADE={eval_metrics['ade_px']:.2f}px  "
-                  f"FDE={eval_metrics['fde_px']:.2f}px  "
+                  f"cbADE={eval_metrics['cb_ade_px']:.2f}px  "
                   f"Static={eval_metrics['bl_static_ade_px']:.2f}px  "
-                  f"Linear={eval_metrics['bl_linear_ade_px']:.2f}px  "
+                  f"cbStatic={eval_metrics['bl_cb_static_ade_px']:.2f}px  "
                   f"Δ={eval_metrics['improvement_vs_static']:+.1f}%  "
+                  f"cbΔ={eval_metrics['cb_improvement_vs_static']:+.1f}%  "
                   f"({time.time()-t_eval:.1f}s)", flush=True)
 
             if eval_metrics["ade_px"] < best_ade:
@@ -401,7 +508,8 @@ def main():
 
         print(f"[{_ts()}] Epoch {epoch:>3d}/{args.num_epochs} ({elapsed:.0f}s) | "
               f"Train: {train_loss['total']:.4f} "
-              f"(nll={train_loss['nll']:.4f}, dist={train_loss['dist']:.6f}) | "
+              f"(nll={train_loss['nll']:.4f}, dist={train_loss['dist']:.6f}, "
+              f"ent={train_loss['attn_entropy']:.4f}) | "
               f"Val: {val_loss['total']:.4f} "
               f"(nll={val_loss['nll']:.4f}, dist={val_loss['dist']:.6f}) | "
               f"lr={lr:.6f}", flush=True)
@@ -413,31 +521,44 @@ def main():
                 "train/nll": train_loss["nll"],
                 "train/dist": train_loss["dist"],
                 "train/w_mean": train_loss["w_mean"],
+                "train/attn_entropy": train_loss["attn_entropy"],
                 "val/total": val_loss["total"],
                 "val/nll": val_loss["nll"],
                 "val/dist": val_loss["dist"],
                 "lr": lr, "epoch_time_s": elapsed,
+                "ss_prob": ss_prob,
             }
             if eval_metrics:
                 log_dict.update({
                     "eval/ade_px": eval_metrics["ade_px"],
                     "eval/fde_px": eval_metrics["fde_px"],
+                    "eval/cb_ade_px": eval_metrics["cb_ade_px"],
+                    "eval/cb_fde_px": eval_metrics["cb_fde_px"],
                     "eval/bl_static_ade_px": eval_metrics["bl_static_ade_px"],
                     "eval/bl_linear_ade_px": eval_metrics["bl_linear_ade_px"],
+                    "eval/bl_cb_static_ade_px": eval_metrics["bl_cb_static_ade_px"],
+                    "eval/bl_cb_linear_ade_px": eval_metrics["bl_cb_linear_ade_px"],
                     "eval/improvement_vs_static_pct": eval_metrics["improvement_vs_static"],
+                    "eval/cb_improvement_vs_static_pct": eval_metrics["cb_improvement_vs_static"],
                     "eval/best_ade_px": best_ade,
                 })
             wandb.log(log_dict, step=global_step + len(loaders["train"]))
 
         ade_str = f"{eval_metrics.get('ade_px', '')}"
         fde_str = f"{eval_metrics.get('fde_px', '')}"
+        cb_ade_str = f"{eval_metrics.get('cb_ade_px', '')}"
+        cb_fde_str = f"{eval_metrics.get('cb_fde_px', '')}"
         bls_str = f"{eval_metrics.get('bl_static_ade_px', '')}"
         bll_str = f"{eval_metrics.get('bl_linear_ade_px', '')}"
+        bls_cb_str = f"{eval_metrics.get('bl_cb_static_ade_px', '')}"
+        bll_cb_str = f"{eval_metrics.get('bl_cb_linear_ade_px', '')}"
         log_file.write(
             f"{epoch},{train_loss['total']:.6f},{train_loss['nll']:.6f},"
             f"{train_loss['dist']:.6f},{val_loss['total']:.6f},"
             f"{val_loss['nll']:.6f},{val_loss['dist']:.6f},{lr:.8f},"
-            f"{ade_str},{fde_str},{bls_str},{bll_str}\n")
+            f"{ss_prob:.4f},"
+            f"{ade_str},{fde_str},{cb_ade_str},{cb_fde_str},"
+            f"{bls_str},{bll_str},{bls_cb_str},{bll_cb_str}\n")
         log_file.flush()
 
         # Checkpointing — always save raw model (unwrap DP)
