@@ -34,13 +34,57 @@ conda create -n sa python=3.8 && conda activate sa
 pip install torch numpy matplotlib scikit-learn scipy wandb
 ```
 
+### Data source (MABe 2022)
+
+This project expects **MABe 2022 Mouse Triplets** keypoint `.npy` archives (30 Hz tracking, three mice per clip).
+
+- **Challenge hub (files, rules, Resources):** [MABe 2022: Mouse Triplets — AIcrowd](https://www.aicrowd.com/challenges/mabe-2022-mouse-triplets)  
+  Download the training keypoint bundles from the challenge **Resources** tab (you may need an AIcrowd account). The starter materials also describe layout and `aicrowd` CLI downloads, e.g. [Getting Started — Round 1](https://www.aicrowd.com/showcase/getting-started-mabe-2022-mouse-triplets-round-1).
+- **Related challenge (videos + larger file set):** [MABe 2022: Mouse Triplets — Video Data](https://www.aicrowd.com/challenges/mabe-2022-mouse-triplets-video-data)  
+  Keypoint-only stages still refer to the same triplet task; use whichever release matches your filenames below.
+
+### Data layout (raw → preprocessed)
+
+All paths below are relative to the **`srnn-pytorch/`** directory (where `preprocess.py` lives).
+
+**1. Raw inputs (you must place these; they are not downloaded by the scripts)**
+
+| File | Purpose |
+|------|---------|
+| `data/mice/user_train_r1.npy` | Round‑1 / split “r1” source dict (`sequences`, keypoints, …) |
+| `data/mice/user_train.npy` | “r2” / general user train source |
+
+If a file is missing, preprocessing **skips** that split; if both are missing, `preprocess.py` exits with an error. Filenames are defined in `preprocess.py` (`DATASET_META`); adjust that table if your downloads use different names.
+
+**2. Preprocessed outputs (directory is created automatically)**
+
+Running `preprocess.py` creates `data/mice/` if needed (`mkdir(parents=True, exist_ok=True)`) and writes tagged `.npz` files, e.g.:
+
+- `dataset_r1_w20_s10_fs4.npz`
+- `dataset_r2_w20_s10_fs4.npz`
+- `dataset_combined_w20_s10_fs4.npz`
+
+Override the folder with `--out_dir` (still relative to `srnn-pytorch/` unless you pass an absolute path).
+
+**3. Training / evaluation**
+
+From the `srnn/` folder, relative `--data` is resolved against **`srnn/`**, so use e.g.:
+
+`--data ../data/mice/dataset_r1_w20_s10_fs4.npz` → file at `srnn-pytorch/data/mice/dataset_r1_w20_s10_fs4.npz`.
+
+`train.py` auto-creates `log/mice/<exp_tag>/` and `save/mice/<exp_tag>/` under `srnn-pytorch/`; it does **not** create the `.npz` file itself.
+
 ### Preprocess
+
+From `srnn-pytorch/`:
 
 ```bash
 python preprocess.py \
-  --window_size 20 --stride 10 --frame_skip 4 \
-  --output ../data/mice/dataset_r1_w20_s10_fs4.npz
+  --window_size 20 --stride 10 --fs 4 \
+  --out_dir data/mice
 ```
+
+This writes `dataset_*_w20_s10_fs4.npz` under `data/mice/`. Use the `r1` (or `combined`) file in `--data` for training to match the published experiments.
 
 ### Train (v3 4kp full, aligned defaults)
 
