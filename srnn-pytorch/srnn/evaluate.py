@@ -1,12 +1,12 @@
 """
 Evaluation pipeline for MouseSRNN on mouse trajectory prediction.
 
-m'nmnSupports variable n_keypoints (1/2/3/4) and graph_type (full/inter).
+Supports variable n_keypoints (1/2/3/4) and graph_type (full/inter).
 All cross-config comparisons use the center_back keypoint (3 nodes).
 
 Usage:
-    python evaluate_mice.py --checkpoint ../save/mice/exp/best_model.tar
-    python evaluate_mice.py --checkpoint ../save/mice/exp/best_model.tar --n_samples 20
+    python evaluate.py --checkpoint ../save/mice/exp/best_model.tar
+    python evaluate.py --checkpoint ../save/mice/exp/best_model.tar --n_samples 20
 """
 
 import argparse
@@ -18,11 +18,11 @@ import time
 import numpy as np
 import torch
 
-from model_mice import MouseSRNN, build_edges_from_nodes
-from mouse_dataset import (
+from model import MouseSRNN, build_edges_from_nodes
+from dataset import (
     get_mouse_dataloaders, get_center_back_node_indices, N_MICE, KP_PRESETS,
 )
-from criterion_mice import gaussian_2d_nll
+from criterion import gaussian_2d_nll
 
 _HAS_WANDB = True
 try:
@@ -355,8 +355,8 @@ def main():
 
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="MS_mice")
-    parser.add_argument("--wandb_entity", type=str,
-                        default="sxiao73-georgia-institute-of-technology")
+    parser.add_argument("--wandb_entity", type=str, default=None,
+                        help="wandb entity (default: logged-in user)")
     parser.add_argument("--wandb_run_id", type=str, default=None)
     args = parser.parse_args()
 
@@ -396,7 +396,6 @@ def main():
     if use_wandb:
         init_kwargs = dict(
             project=args.wandb_project,
-            entity=args.wandb_entity,
             job_type="eval",
             config={**vars(saved_args), "eval_split": args.split,
                     "eval_mode": args.mode, "n_keypoints": n_kps,
@@ -404,6 +403,8 @@ def main():
             tags=["eval", args.split, args.mode,
                   f"kp{n_kps}", graph_type],
         )
+        if args.wandb_entity:
+            init_kwargs["entity"] = args.wandb_entity
         if args.wandb_run_id:
             init_kwargs["id"] = args.wandb_run_id
             init_kwargs["resume"] = "allow"

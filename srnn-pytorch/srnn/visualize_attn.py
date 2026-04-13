@@ -10,14 +10,14 @@ Per sample generates:
 
 Usage:
   # Single sample (auto-pick high activity):
-  python visualize_attn_pairwise.py --checkpoint ../save/mice/v3_4kp_full/best_model.tar \
+  python visualize_attn.py --checkpoint ../checkpoints/best_model.tar \
     --data ../data/mice/dataset_r1_w20_s10_fs4.npz
 
   # Multiple specific samples:
-  python visualize_attn_pairwise.py --checkpoint ... --data ... --sample_idx 100 200 300
+  python visualize_attn.py --checkpoint ... --data ... --sample_idx 100 200 300
 
   # Auto-select best + active + chase:
-  python visualize_attn_pairwise.py --checkpoint ... --data ... --auto_select \
+  python visualize_attn.py --checkpoint ... --data ... --auto_select \
     --n_best 6 --n_active 3
 """
 import torch
@@ -29,7 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from model_mice import MouseSRNN, build_edges_from_nodes
+from model import MouseSRNN, build_edges_from_nodes
 
 ARENA_PX = 450
 N_MICE = 3

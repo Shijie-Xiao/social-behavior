@@ -1,51 +1,51 @@
 # Social Attention for Multi-Mouse Trajectory Prediction
 
-Adapted from [Social Attention: Modeling Attention in Human Crowds](https://arxiv.org/abs/1710.04689) (Vemula et al., ICRA 2018).
+Adapted from [Social Attention: Modeling Attention in Human Crowds](https://arxiv.org/abs/1710.04689) (Vemula et al., ICRA 2018).  
 Original code: [cmubig/socialAttention](https://github.com/cmubig/socialAttention/tree/master/social-attention/srnn-pytorch)
 
-## Key Contributions
+## Key contributions
 
-- **Multi-keypoint graph**: Extended single-node-per-agent to 4 keypoints per mouse (nose, ear, center_back, tail_base), enabling body pose prediction and fine-grained attention analysis
-- **Dual-stream Bahdanau attention**: Separate softmax for intra-mouse (body structure) and inter-mouse (social interaction) edges, replacing dot-product attention to resolve gradient vanishing at LSTM zero-initialization
-- **Keypoint type embeddings + direction/log-distance spatial encoding**: Enables the model to distinguish edge semantics (e.g., nose→tail vs cb→cb)
-- **10.4% improvement** in center_back trajectory prediction over single-keypoint baseline (12.53 vs 13.98 px)
-- **Biologically meaningful attention patterns**: center_back as primary social reference; nose as intra-mouse attention hub; differential tail attention during chase events
-- **Behavioral representation learning**: Hidden states support light condition classification (AUC=0.832) and chase detection (AUC=0.840)
+- **Multi-keypoint graph**: Up to four keypoints per mouse (nose, ear, center_back, tail_base) for pose-aware prediction and attention analysis.
+- **Dual-stream Bahdanau attention**: Separate softmax over intra- vs inter-mouse edges; replaces dot-product attention to avoid vanishing gradients at LSTM cold start.
+- **Keypoint embeddings + direction / log-distance encoding**: Distinguishes edge semantics (e.g. nose→tail vs center_back→center_back).
+- **~10% lower center_back ADE** than the single-keypoint baseline on the held-out split (see table below).
+- **Interpretable attention**: center_back as a social anchor; nose as intra-mouse hub; tail weight shifts during chase-like motion.
+- **Behavioral probes**: Observation-only hidden states reach about **AUC 0.77** on light condition after fixing a prior leakage bug (older ~0.83 numbers used future frames). Chase labels are extremely rare; balanced logistic regression on raw kinematics often matches or beats shallow probes on embeddings alone.
 
 ## Results
 
-Evaluated on MABe 2022 mouse triplet data (2783 test windows, 10-frame observation → 10-frame prediction at 7.5 fps).
+MABe 2022 triplet data, 10-frame observation → 10-frame prediction (7.5 Hz after frame skip).
 
-| Method | CB ADE (px) | vs Static Baseline |
-|--------|-------------|-------------------|
+| Method | CB ADE (px) | vs static baseline |
+|--------|---------------|---------------------|
 | Static (repeat last) | 17.63 | — |
 | Constant velocity | 21.77 | — |
 | MouseSRNN 1kp | 13.98 | +20.7% |
 | **MouseSRNN 4kp (ours)** | **12.53** | **+29.0%** |
 
-4kp outperforms 1kp at every prediction timestep (p < 1e-50, win rate 62%), with the gap growing from 0.4 px at t=1 to 1.9 px at t=10.
+Use `python evaluate.py` (calls `net.predict()` with rolling edges) for all reported metrics; ad-hoc autoregressive loops must stay aligned with ground-truth time indexing.
 
 ## Reproduction
 
-### Setup
+### Environment
 
 ```bash
 conda create -n sa python=3.8 && conda activate sa
 pip install torch numpy matplotlib scikit-learn scipy wandb
 ```
 
-### Data Preprocessing
+### Preprocess
 
 ```bash
-python preprocess_mice.py \
+python preprocess.py \
   --window_size 20 --stride 10 --frame_skip 4 \
   --output ../data/mice/dataset_r1_w20_s10_fs4.npz
 ```
 
-### Training
+### Train (v3 4kp full, aligned defaults)
 
 ```bash
-cd srnn && python train_mice.py \
+cd srnn && python train.py \
   --data ../data/mice/dataset_r1_w20_s10_fs4.npz \
   --n_keypoints 4 --graph_type full \
   --num_epochs 100 --batch_size 16 \
@@ -55,24 +55,29 @@ cd srnn && python train_mice.py \
   --exp_tag v3_4kp_full
 ```
 
-### Evaluation
+Checkpoints are written under `save/mice/<exp_tag>/best_model.tar`. For a stable local path, copy the best file to `checkpoints/best_model.tar` (directory tracked via `.gitkeep`; `*.tar` is gitignored).
+
+### Evaluate
 
 ```bash
-python evaluate_mice.py \
-  --checkpoint ../save/mice/v3_4kp_full/best_model.tar \
+cd srnn && python evaluate.py \
+  --checkpoint ../checkpoints/best_model.tar \
   --split test --mode mean
 ```
 
-### Visualization
+### Attention / trajectory figures
 
 ```bash
-python visualize_attn_pairwise.py \
-  --checkpoint ../save/mice/v3_4kp_full/best_model.tar \
+cd srnn && python visualize_attn.py \
+  --checkpoint ../checkpoints/best_model.tar \
   --data ../data/mice/dataset_r1_w20_s10_fs4.npz \
   --auto_select --n_best 6 --n_active 3
 ```
 
-Generates per sample: trajectory plot, 12×12 attention heatmap, mouse-level attention heatmap, and per-node intra/inter attention figures.
+## Repository layout (what to commit)
+
+Track: `README.md`, `.gitignore`, `preprocess.py`, `srnn/*.py`, `checkpoints/.gitkeep`.  
+Ignore (see `.gitignore`): `wandb/`, `save/`, `log/`, `data/`, `__pycache__/`, `*.npz`, `*.tar`, `*.pkl`, `*.png`, and other generated artifacts.
 
 ## Citation
 

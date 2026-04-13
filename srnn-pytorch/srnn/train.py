@@ -10,9 +10,9 @@ Features:
   - Periodic autoregressive evaluation (ADE/FDE/baselines)
 
 Usage:
-    python train_mice.py --exp_tag run01
-    python train_mice.py --data ../data/mice/dataset_r1_w20_s10_fs4.npz --num_epochs 100
-    python train_mice.py --no_wandb --no_amp   # disable wandb and AMP
+    python train.py --exp_tag run01
+    python train.py --data ../data/mice/dataset_r1_w20_s10_fs4.npz --num_epochs 100
+    python train.py --no_wandb --no_amp   # disable wandb and AMP
 """
 
 import argparse
@@ -24,9 +24,9 @@ import time
 import torch
 import torch.nn as nn
 
-from model_mice import MouseSRNN, build_edges_from_nodes
-from mouse_dataset import get_mouse_dataloaders, get_center_back_node_indices
-from criterion_mice import combined_loss, compute_bone_stats
+from model import MouseSRNN, build_edges_from_nodes
+from dataset import get_mouse_dataloaders, get_center_back_node_indices
+from criterion import combined_loss, compute_bone_stats
 
 _HAS_WANDB = True
 try:
@@ -318,8 +318,8 @@ def main():
     # Wandb
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="MS_mice")
-    parser.add_argument("--wandb_entity", type=str,
-                        default="sxiao73-georgia-institute-of-technology")
+    parser.add_argument("--wandb_entity", type=str, default=None,
+                        help="wandb entity (default: logged-in user)")
 
     args = parser.parse_args()
     args.seq_length = args.obs_length + args.pred_length
@@ -343,13 +343,17 @@ def main():
     # ── Wandb ──
     use_wandb = _HAS_WANDB and not args.no_wandb
     if use_wandb:
-        wandb.init(
-            project=args.wandb_project, entity=args.wandb_entity,
-            name=args.exp_tag, config=vars(args),
+        _wb = dict(
+            project=args.wandb_project,
+            name=args.exp_tag,
+            config=vars(args),
             tags=["mouseSRNN", f"obs{args.obs_length}",
                   f"pred{args.pred_length}"],
             save_code=True,
         )
+        if args.wandb_entity:
+            _wb["entity"] = args.wandb_entity
+        wandb.init(**_wb)
         wandb.run.log_code(
             root=base_dir,
             include_fn=lambda p: p.endswith(".py"),

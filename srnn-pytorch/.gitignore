@@ -7,6 +7,7 @@
 *.png
 *.pyc
 save
+save/
 *.cpkl
 *.backup
 test.py
@@ -22,6 +23,12 @@ save_*
 plot_*
 copy_from_server.sh
 log
+log/
 
-# Experiment directories
+# Experiment directories & artifacts
 data/
+wandb/
+__pycache__/
+*.tar
+*.pkl
+*.npz

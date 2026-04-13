@@ -8,9 +8,9 @@ and builds sliding-window datasets ready for SRNN training.
 Produces three datasets: r1 (user_train_r1), r2 (user_train), and combined.
 
 Usage:
-    python preprocess_mice.py --window_size 20
-    python preprocess_mice.py --window_size 15 --stride 7
-    python preprocess_mice.py --analyze_only
+    python preprocess.py --window_size 20
+    python preprocess.py --window_size 15 --stride 7
+    python preprocess.py --analyze_only
 """
 
 import argparse
