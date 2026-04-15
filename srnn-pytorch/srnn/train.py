@@ -448,6 +448,7 @@ def main():
     best_val = float("inf")
     best_epoch = 0
     best_ade = float("inf")
+    best_ade_epoch = 0
 
     ss_enabled = args.ss_max > 0
     print(f"\n{'='*60}")
@@ -513,6 +514,16 @@ def main():
 
             if eval_metrics["ade_px"] < best_ade:
                 best_ade = eval_metrics["ade_px"]
+                best_ade_epoch = epoch
+                ade_ckpt = {
+                    "epoch": epoch,
+                    "state_dict": _get_raw_model(net).state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "val_loss": val_loss, "args": vars(args),
+                    "ade_px": best_ade,
+                }
+                torch.save(ade_ckpt, os.path.join(save_dir, "best_ade_model.tar"))
+                print(f"  [{_ts()}] New best ADE={best_ade:.2f}px at epoch {epoch}, saved best_ade_model.tar")
 
         print(f"[{_ts()}] Epoch {epoch:>3d}/{args.num_epochs} ({elapsed:.0f}s) | "
               f"Train: {train_loss['total']:.4f} "
@@ -589,8 +600,8 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Training complete")
-    print(f"  Best epoch: {best_epoch}, Best val loss: {best_val:.4f}")
-    print(f"  Best ADE: {best_ade:.2f} px")
+    print(f"  Best val_loss epoch: {best_epoch}, val_loss: {best_val:.4f}")
+    print(f"  Best ADE epoch: {best_ade_epoch}, ADE: {best_ade:.2f} px")
     print(f"  Model saved to: {save_dir}")
     print(f"{'='*60}")
 
@@ -598,6 +609,7 @@ def main():
         wandb.summary["best_epoch"] = best_epoch
         wandb.summary["best_val_loss"] = best_val
         wandb.summary["best_ade_px"] = best_ade
+        wandb.summary["best_ade_epoch"] = best_ade_epoch
 
         artifact = wandb.Artifact(
             name=f"model-{args.exp_tag}", type="model",
