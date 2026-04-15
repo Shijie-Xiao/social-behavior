@@ -49,19 +49,6 @@ def node_label(n):
 # ─── Model inference ─────────────────────────────────────────────────
 
 def run_model(net, nodes_tensor, obs_length):
-    """
-    Autoregressive inference aligned with model.predict().
-
-    During observation (t < obs_length): uses GT positions and GT-derived edges.
-    During prediction  (t >= obs_length): uses model's own predicted positions
-    to compute temporal and spatial edges on the fly — no GT leakage.
-
-    Returns
-    -------
-    pred    : (B, pred_len, N, 2) numpy or None
-    a_inter : list of (B, N, K_inter) numpy, one per timestep 0..T-2
-    a_intra : list of (B, N, K_intra) numpy (may be empty)
-    """
     B, T, N, _ = nodes_tensor.shape
     dev = nodes_tensor.device
     ht = torch.zeros(B, N, net.er, device=dev)
@@ -70,30 +57,19 @@ def run_model(net, nodes_tensor, obs_length):
     cs = torch.zeros(B, net.n_spatial, net.er, device=dev)
     hn = torch.zeros(B, N, net.nr, device=dev)
     cn = torch.zeros(B, N, net.nr, device=dev)
+    et, es = build_edges_from_nodes(
+        nodes_tensor, net._spatial_src, net._spatial_dst)
 
-    prev_pos = nodes_tensor[:, 0].clone()
     preds, a_inter, a_intra = [], [], []
-
-    for t in range(T - 1):
-        if t < obs_length:
-            current_pos = nodes_tensor[:, t]
-        else:
-            current_pos = nxt
-
-        if t == 0:
-            e_temp = torch.zeros(B, N, 2, device=dev)
-        else:
-            e_temp = prev_pos - current_pos
-        e_spat_raw = (current_pos[:, net._spatial_src, :] -
-                      current_pos[:, net._spatial_dst, :])
-
-        te = net.temporal_edge_enc(e_temp)
+    for t in range(T):
+        inp = nodes_tensor[:, t] if t < obs_length else nxt
+        te = net.temporal_edge_enc(et[:, min(t, T - 1)])
         hf, cf = net.temporal_edge_rnn(
             te.reshape(B * N, -1),
             (ht.reshape(B * N, -1), ct.reshape(B * N, -1)))
         ht, ct = hf.reshape(B, N, -1), cf.reshape(B, N, -1)
 
-        se = net.spatial_edge_enc(net._encode_spatial(e_spat_raw))
+        se = net.spatial_edge_enc(net._encode_spatial(es[:, min(t, T - 1)]))
         hf2, cf2 = net.spatial_edge_rnn(
             se.reshape(B * net.n_spatial, -1),
             (hs.reshape(B * net.n_spatial, -1),
@@ -101,7 +77,7 @@ def run_model(net, nodes_tensor, obs_length):
         hs, cs = hf2.reshape(B, net.n_spatial, -1), cf2.reshape(B, net.n_spatial, -1)
 
         hi, he, wia, wie, _ = net._attend(ht, hs, B, N, dev)
-        ni = net.node_enc(current_pos)
+        ni = net.node_enc(inp)
         ei = net.edge_attn_enc(torch.cat([ht, hi, he], dim=-1))
         ri = torch.cat([ni, ei], dim=-1)
         hf3, cf3 = net.node_rnn(
@@ -112,12 +88,9 @@ def run_model(net, nodes_tensor, obs_length):
         o = net.output_linear(hn)
         if net.residual:
             o = o.clone()
-            o[..., :2] = o[..., :2] + current_pos
+            o[..., :2] = o[..., :2] + inp
         nxt = o[..., :2]
-
-        prev_pos = current_pos.clone()
-
-        if t >= obs_length - 1:
+        if t >= obs_length:
             preds.append(nxt.cpu().numpy())
         a_inter.append(wie.cpu().numpy())
         if wia is not None:
