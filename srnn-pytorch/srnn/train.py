@@ -293,6 +293,12 @@ def main():
     parser.add_argument("--lambda_attn", type=float, default=0.01,
                         help="Attention entropy regularization weight "
                              "(encourages non-uniform attention)")
+    parser.add_argument("--attn_clamp", type=float, default=5.0,
+                        help="Clamp attention logits to [-C, C]; use <=0 to disable")
+    parser.add_argument("--attn_temp_intra", type=float, default=1.0,
+                        help="Softmax temperature for intra-mouse attention")
+    parser.add_argument("--attn_temp_inter", type=float, default=1.0,
+                        help="Softmax temperature for inter-mouse attention")
 
     # Scheduled Sampling (Bengio et al. 2015)
     parser.add_argument("--ss_start_epoch", type=int, default=20,
@@ -454,7 +460,9 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Training: {args.num_epochs} epochs, batch={effective_batch}")
     print(f"  AdamW weight_decay={args.weight_decay}")
-    print(f"  Attention: additive (Bahdanau), entropy_reg={args.lambda_attn}")
+    print(f"  Attention: additive (Bahdanau), entropy_reg={args.lambda_attn}, "
+          f"clamp={args.attn_clamp}, temp_intra={args.attn_temp_intra}, "
+          f"temp_inter={args.attn_temp_inter}")
     print(f"  Residual prediction: {'ON' if args.residual else 'OFF'}")
     print(f"  LR warmup: {warmup_epochs} epochs → cosine to 1e-5")
     if ss_enabled:

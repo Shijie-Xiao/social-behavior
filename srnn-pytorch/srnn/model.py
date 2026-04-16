@@ -150,6 +150,16 @@ class MouseSRNN(nn.Module):
 
         self.output_linear = nn.Linear(nr, 5)
 
+        # Legacy checkpoints omit attn_clamp → no clamp (match original softmax).
+        # Training defaults to a finite clamp via train.py argparse.
+        _c = getattr(args, "attn_clamp", None)
+        if _c is None or float(_c) <= 0:
+            self.attn_clamp = float("inf")
+        else:
+            self.attn_clamp = float(_c)
+        self.attn_temp_intra = float(getattr(args, "attn_temp_intra", 1.0))
+        self.attn_temp_inter = float(getattr(args, "attn_temp_inter", 1.0))
+
     # ── helpers ──────────────────────────────────────────────────────
 
     def _encode_spatial(self, displacement):
@@ -187,7 +197,8 @@ class MouseSRNN(nn.Module):
             k_intra = self.attn_k_intra(h_sp_intra)    # (B, N, K_intra, A)
             s_intra = self.attn_score_intra(
                 torch.tanh(q + k_intra)).squeeze(-1)    # (B, N, K_intra)
-            w_intra = F.softmax(s_intra, dim=-1)
+            s_intra = s_intra.clamp(-self.attn_clamp, self.attn_clamp)
+            w_intra = F.softmax(s_intra / self.attn_temp_intra, dim=-1)
             h_intra_attn = torch.einsum("bnk,bnke->bne", w_intra, h_sp_intra)
             entropy = entropy - (w_intra * torch.log(w_intra + 1e-10)).sum(-1).mean()
         else:
@@ -198,7 +209,8 @@ class MouseSRNN(nn.Module):
         k_inter = self.attn_k_inter(h_sp_inter)        # (B, N, K_inter, A)
         s_inter = self.attn_score_inter(
             torch.tanh(q + k_inter)).squeeze(-1)        # (B, N, K_inter)
-        w_inter = F.softmax(s_inter, dim=-1)
+        s_inter = s_inter.clamp(-self.attn_clamp, self.attn_clamp)
+        w_inter = F.softmax(s_inter / self.attn_temp_inter, dim=-1)
         h_inter_attn = torch.einsum("bnk,bnke->bne", w_inter, h_sp_inter)
         entropy = entropy - (w_inter * torch.log(w_inter + 1e-10)).sum(-1).mean()
 
