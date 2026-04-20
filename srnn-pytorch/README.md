@@ -1,29 +1,78 @@
 # Social Attention for Multi-Mouse Trajectory Prediction
 
-Adapted from [Social Attention: Modeling Attention in Human Crowds](https://arxiv.org/abs/1710.04689) (Vemula et al., ICRA 2018).  
-Original code: [cmubig/socialAttention](https://github.com/cmubig/socialAttention/tree/master/social-attention/srnn-pytorch)
+Adapted from [Social Attention (Vemula et al., ICRA 2018)](https://arxiv.org/abs/1710.04689). Original code: [cmubig/socialAttention](https://github.com/cmubig/socialAttention/tree/master/social-attention/srnn-pytorch).
 
-## Key contributions
+## Model Architecture
 
-- **Multi-keypoint graph**: Up to four keypoints per mouse (nose, ear, center_back, tail_base) for pose-aware prediction and attention analysis.
-- **Dual-stream Bahdanau attention**: Separate softmax over intra- vs inter-mouse edges; replaces dot-product attention to avoid vanishing gradients at LSTM cold start.
-- **Keypoint embeddings + direction / log-distance encoding**: Distinguishes edge semantics (e.g. nose→tail vs center_back→center_back).
-- **~10% lower center_back ADE** than the single-keypoint baseline on the held-out split (see table below).
-- **Interpretable attention**: center_back as a social anchor; nose as intra-mouse hub; tail weight shifts during chase-like motion.
-- **Behavioral probes**: Observation-only hidden states reach about **AUC 0.77** on light condition after fixing a prior leakage bug (older ~0.83 numbers used future frames). Chase labels are extremely rare; balanced logistic regression on raw kinematics often matches or beats shallow probes on embeddings alone.
+**MouseSRNN** predicts future keypoints for multiple mice given observed trajectories. The architecture has four stages per time step:
+
+```
+Observed positions (B, T, N, 2)
+        │
+  ┌─────┴──────┐
+  │ Edge RNNs  │  Temporal edges: Δposition between consecutive frames
+  │            │  Spatial edges:  relative position between connected keypoints
+  └─────┬──────┘
+        │ h_temp (B, N, er), h_spat (B, E, er)
+  ┌─────┴──────────┐
+  │ Dual-stream    │  Query: Q(h_temp)   Keys: K_intra(h_spat), K_inter(h_spat)
+  │ Bahdanau Attn  │  Score = v^T tanh(Q + K)
+  │ + Clamp+Temp   │  s = clamp(score, -C, C)
+  │                │  w = softmax(s / τ)
+  └─────┬──────────┘
+        │ h_intra_attn, h_inter_attn
+  ┌─────┴──────┐
+  │ Node RNN   │  Input: [pos_encoding, h_temp, h_intra, h_inter]
+  │ + Residual  │  Output: Δposition (residual) or bivariate Gaussian params
+  └─────────────┘
+```
+
+### Key components
+
+**Multi-keypoint graph.** Each mouse has up to 4 keypoints (nose, ear, center_back, tail_base). A `full` graph connects every keypoint pair with directed spatial edges (12 nodes, 132 edges).
+
+**Dual-stream attention.** Intra-mouse edges (same mouse, different keypoints) and inter-mouse edges (different mice) attend separately with independent softmax, then their weighted context vectors are concatenated.
+
+**Score clamping + temperature.** The raw Bahdanau score `v^T tanh(Q+K)` is clamped to `[-C, C]` (default C=5) and divided by temperature τ (default τ_inter=2, τ_intra=1) before softmax. This prevents the learned score vector `v` from expanding unboundedly, which would collapse attention into hard argmax and destroy interpretability.
+
+**Keypoint-type embeddings.** A learnable encoding distinguishes edge types (e.g. nose→tail vs cb→cb), injected into the spatial edge encoder.
+
+**Direction + log-distance encoding.** Each spatial edge encodes both the direction vector and `log(‖Δ‖ + 1)`, providing the model with explicit geometric information.
+
+### Inference modes
+
+| Mode | Description |
+|------|-------------|
+| Teacher forcing | Ground-truth positions as input at every step (training) |
+| Scheduled sampling | Mix of ground-truth and model predictions (training, controlled by `ss_max`) |
+| Autoregressive | Model predictions fed back as input (evaluation, via `net.predict()`) |
 
 ## Results
 
-MABe 2022 triplet data, 10-frame observation → 10-frame prediction (7.5 Hz after frame skip).
+MABe 2022 Mouse Triplets, 10 obs → 10 pred frames (7.5 Hz). Full test set (2783 windows).
 
-| Method | CB ADE (px) | vs static baseline |
-|--------|---------------|---------------------|
-| Static (repeat last) | 17.63 | — |
-| Constant velocity | 21.77 | — |
-| MouseSRNN 1kp | 13.98 | +20.7% |
-| **MouseSRNN 4kp (ours)** | **12.53** | **+29.0%** |
+| Method | ADE (px) | cbADE (px) |
+|--------|----------|------------|
+| Static (repeat last) | 18.56 | 17.63 |
+| Constant velocity | 24.87 | 21.77 |
+| MouseSRNN 1-keypoint | 15.78 | 13.98 |
+| MouseSRNN 4-keypoint | 14.42 | 12.33 |
 
-Use `python evaluate.py` (calls `net.predict()` with rolling edges) for all reported metrics; ad-hoc autoregressive loops must stay aligned with ground-truth time indexing.
+### Attention interpretability
+
+| Metric | Without clamp+temp | With clamp+temp |
+|--------|:---:|:---:|
+| Inter-attention entropy (% of uniform) | 2.9% | 40.6% |
+| Hard argmax fraction (>99% weight) | 84.4% | 0% |
+| Closest-keypoint match accuracy | 33.6% | 46.9% |
+| \|v_inter\| norm | 16.27 | 1.41 |
+
+### Learned attention patterns
+
+- **Tail preference**: Inter-attention strongly favors the tail keypoint of other mice (weight ≈ 0.47), consistent with tracking and sniffing behavior.
+- **Dynamic redistribution**: During sudden turns, inter-attention flattens toward uniform across targets, expressing uncertainty rather than committing to a single target.
+- **Heading encoding**: Intra-attention nose-weight rises from ~0.03 to ~0.29 during sharp turns, encoding heading direction changes.
+- **Distance adaptivity**: Close-range attention is distributed across multiple targets; far-range attention concentrates on a single anchor.
 
 ## Reproduction
 
@@ -34,59 +83,30 @@ conda create -n sa python=3.8 && conda activate sa
 pip install torch numpy matplotlib scikit-learn scipy wandb
 ```
 
-### Data source (MABe 2022)
+### Data
 
-This project expects **MABe 2022 Mouse Triplets** keypoint `.npy` archives (30 Hz tracking, three mice per clip).
+This project uses **MABe 2022 Mouse Triplets** keypoint data.
 
-- **Challenge hub (files, rules, Resources):** [MABe 2022: Mouse Triplets — AIcrowd](https://www.aicrowd.com/challenges/mabe-2022-mouse-triplets)  
-  Download the training keypoint bundles from the challenge **Resources** tab (you may need an AIcrowd account). The starter materials also describe layout and `aicrowd` CLI downloads, e.g. [Getting Started — Round 1](https://www.aicrowd.com/showcase/getting-started-mabe-2022-mouse-triplets-round-1).
-- **Related challenge (videos + larger file set):** [MABe 2022: Mouse Triplets — Video Data](https://www.aicrowd.com/challenges/mabe-2022-mouse-triplets-video-data)  
-  Keypoint-only stages still refer to the same triplet task; use whichever release matches your filenames below.
+- **Challenge hub:** [MABe 2022: Mouse Triplets — AIcrowd](https://www.aicrowd.com/challenges/mabe-2022-mouse-triplets)
 
-### Data layout (raw → preprocessed)
-
-All paths below are relative to the **`srnn-pytorch/`** directory (where `preprocess.py` lives).
-
-**1. Raw inputs (you must place these; they are not downloaded by the scripts)**
+Place the raw files under `data/mice/`:
 
 | File | Purpose |
 |------|---------|
-| `data/mice/user_train_r1.npy` | Round‑1 / split “r1” source dict (`sequences`, keypoints, …) |
-| `data/mice/user_train.npy` | “r2” / general user train source |
-
-If a file is missing, preprocessing **skips** that split; if both are missing, `preprocess.py` exits with an error. Filenames are defined in `preprocess.py` (`DATASET_META`); adjust that table if your downloads use different names.
-
-**2. Preprocessed outputs (directory is created automatically)**
-
-Running `preprocess.py` creates `data/mice/` if needed (`mkdir(parents=True, exist_ok=True)`) and writes tagged `.npz` files, e.g.:
-
-- `dataset_r1_w20_s10_fs4.npz`
-- `dataset_r2_w20_s10_fs4.npz`
-- `dataset_combined_w20_s10_fs4.npz`
-
-Override the folder with `--out_dir` (still relative to `srnn-pytorch/` unless you pass an absolute path).
-
-**3. Training / evaluation**
-
-From the `srnn/` folder, relative `--data` is resolved against **`srnn/`**, so use e.g.:
-
-`--data ../data/mice/dataset_r1_w20_s10_fs4.npz` → file at `srnn-pytorch/data/mice/dataset_r1_w20_s10_fs4.npz`.
-
-`train.py` auto-creates `log/mice/<exp_tag>/` and `save/mice/<exp_tag>/` under `srnn-pytorch/`; it does **not** create the `.npz` file itself.
+| `user_train_r1.npy` | Round-1 source dict |
+| `user_train.npy` | General user train source |
 
 ### Preprocess
 
-From `srnn-pytorch/`:
-
 ```bash
-python preprocess.py \
+cd srnn-pytorch && python preprocess.py \
   --window_size 20 --stride 10 --fs 4 \
   --out_dir data/mice
 ```
 
-This writes `dataset_*_w20_s10_fs4.npz` under `data/mice/`. Use the `r1` (or `combined`) file in `--data` for training to match the published experiments.
+Writes `dataset_*_w20_s10_fs4.npz` under `data/mice/`.
 
-### Train (v3 4kp full, aligned defaults)
+### Train
 
 ```bash
 cd srnn && python train.py \
@@ -96,32 +116,38 @@ cd srnn && python train.py \
   --learning_rate 0.001 --weight_decay 0.0 \
   --warmup_epochs 0 --ss_max 0.0 \
   --grad_clip 10.0 --lambda_dist 0.5 --lambda_attn 0.01 \
-  --exp_tag v3_4kp_full
+  --attn_clamp 5.0 --attn_temp_intra 1.0 --attn_temp_inter 2.0 \
+  --no_wandb \
+  --exp_tag experiment
 ```
 
-Checkpoints are written under `save/mice/<exp_tag>/best_model.tar`. For a stable local path, copy the best file to `checkpoints/best_model.tar` (directory tracked via `.gitkeep`; `*.tar` is gitignored).
+Key attention hyperparameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--attn_clamp` | 5.0 | Clamp attention logits to [-C, C]; set ≤0 to disable |
+| `--attn_temp_intra` | 1.0 | Softmax temperature for intra-mouse attention |
+| `--attn_temp_inter` | 1.0 | Softmax temperature for inter-mouse attention |
+| `--lambda_attn` | 0.01 | Weight for attention entropy regularization loss |
+
+Checkpoints: `best_model.tar` (lowest val loss), `best_ade_model.tar` (lowest ADE).
 
 ### Evaluate
 
 ```bash
 cd srnn && python evaluate.py \
-  --checkpoint ../checkpoints/best_model.tar \
+  --checkpoint ../save/mice/<exp_tag>/best_ade_model.tar \
   --split test --mode mean
 ```
 
-### Attention / trajectory figures
+### Visualize attention
 
 ```bash
 cd srnn && python visualize_attn.py \
-  --checkpoint ../checkpoints/best_model.tar \
+  --checkpoint ../save/mice/<exp_tag>/best_ade_model.tar \
   --data ../data/mice/dataset_r1_w20_s10_fs4.npz \
   --auto_select --n_best 6 --n_active 3
 ```
-
-## Repository layout (what to commit)
-
-Track: `README.md`, `.gitignore`, `preprocess.py`, `srnn/*.py`, `checkpoints/.gitkeep`.  
-Ignore (see `.gitignore`): `wandb/`, `save/`, `log/`, `data/`, `__pycache__/`, `*.npz`, `*.tar`, `*.pkl`, `*.png`, and other generated artifacts.
 
 ## Citation
 
